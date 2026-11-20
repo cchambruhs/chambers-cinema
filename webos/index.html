@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Home Theater</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#080e19;color:#fff;font:22px Arial,sans-serif}#art{position:fixed;inset:0;top:0;left:0;right:0;bottom:0;background-position:center;background-size:cover;z-index:0}#shade{position:fixed;top:0;left:0;right:0;bottom:0;background:linear-gradient(90deg,rgba(8,14,25,.9),transparent),linear-gradient(0deg,#080e19,transparent);z-index:1}.shell{position:relative;z-index:2;padding:3vh 3vw}header{font-size:32px;font-weight:bold;margin-bottom:4vh}.connect{float:right}nav{float:left;width:20%;min-height:68vh;background:rgba(33,41,54,.83);border:1px solid #718093;border-radius:20px;padding:12px}main{margin-left:23%;padding-top:17vh}.page{display:none}.page:target{display:block}.page:target~#home{display:none}#home{display:block}a,button{color:#fff;font:inherit;text-decoration:none;background:#263345;border:1px solid #718093;border-radius:12px;padding:.55em .75em;cursor:pointer}nav a{display:block;margin:.3em 0;background:transparent;border-color:transparent}a:focus,button:focus,input:focus{outline:3px solid #ffd184;outline-offset:2px}h1,h2{margin:.3em 0 .55em}.tile,.card{display:inline-block;vertical-align:top;margin:0 1% 12px 0;text-align:left;background-color:#253146;background-size:cover;background-position:center}.tile{width:47%;min-height:16vh;font-size:34px;font-weight:bold;background:rgba(43,53,73,.87)}.card{width:23%;min-height:100px;padding-top:64px;font-size:20px;font-weight:bold;text-shadow:1px 1px 4px #000;color:#fff}.panel{padding:18px;border-radius:18px;background:#1c2638;max-width:560px}.panel label{display:block;margin:.75em 0}.panel input{font:inherit;width:100%;display:block}#status{color:#ffdc9e}.actions a{display:inline-block;margin:.4em .3em .2em 0}
+#player video{width:100%;max-height:58vh;background:#000}#player select,#score{font:inherit;margin:12px;color:white;background:#263345}#episodes button{display:block;margin:8px 0}#player{padding-bottom:2em}</style></head>
+<body><div id="art"></div><div id="shade"></div><div class="shell">
+<header>Home Theater <a class="connect" href="#connect">Connect Jellyfin</a></header>
+<nav aria-label="Main navigation">
+<a href="#home">Home</a><a href="#library">Full Library</a><a href="#favorites">Favorites</a><a href="#movies">Movies</a><a href="#shows">TV Shows</a><a href="#match">Movie Match</a><a href="#requests">Requests</a>
+</nav>
+<main>
+<section class="page" id="library"><h1>Full Library</h1><div id="library-items"><a href="#connect">Connect Jellyfin to load your library</a></div></section>
+<section class="page" id="favorites"><h1>Favorites</h1><div id="favorites-items"><a href="#connect">Connect Jellyfin to load your favorites</a></div></section>
+<section class="page" id="movies"><h1>Movies</h1><div id="movies-items"><a href="#connect">Connect Jellyfin to load your movies</a></div></section>
+<section class="page" id="shows"><h1>TV Shows</h1><div id="shows-items"><a href="#connect">Connect Jellyfin to load your shows</a></div></section>
+<section class="page" id="match"><h1>Movie Match</h1><p>The shared queue is pending integration.</p></section>
+<section class="page" id="requests"><h1>Requests</h1><p>Open your Seerr server in a browser to make a request.</p></section>
+<section class="page" id="connect"><div class="panel">
+<h1>Connect Jellyfin</h1><p>Enter the full address of your Jellyfin server.</p>
+<form id="signin" hidden><label>Server address<input id="server-address" type="url" required placeholder="http://server-ip:8096"></label><label>Username<input id="username" required autocomplete="username"></label><label>Password<input id="password" type="password" required autocomplete="current-password"></label><button type="submit" id="submit">Sign in</button><p id="status" role="status"></p></form>
+<div class="actions"><a id="direct" href="#connect" hidden>Open Jellyfin directly</a></div>
+</div></section>
+<section class="page" id="detail"><div class="panel"><h1 id="detail-title">Title</h1><p id="detail-note" role="status"></p><div class="actions"><button id="play" type="button">Play here</button><a id="watch" href="#connect">Open in Jellyfin</a><button id="favorite">Add to Favorites</button><a id="back" href="#home">Back</a></div><div id="episodes"></div></div></section>
+<section class="page" id="player"><h1 id="playing-title"></h1><video id="video" controls crossorigin="anonymous"></video><div><label>Captions <select id="captions"><option value="-1">Off</option></select></label><a href="#detail" id="exit-player">Back</a></div><p id="play-status" role="status"></p></section>
+<section class="page" id="home"><a class="tile" href="#movies">Movies</a><a class="tile" href="#shows">TV Shows</a><h2>Recently Added</h2><div id="recent-items"><a href="#connect">Connect Jellyfin to see recently added titles</a></div></section>
+</main></div>
+<script>
+(function () {
+  'use strict';
+  var server = '';
+  var address = document.getElementById('server-address');
+  var direct = document.getElementById('direct');
+  try { address.value = localStorage.getItem('chambers-cinema-server') || ''; } catch (error) {}
+  function updateAddress() {
+    var value = address.value.trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/[^\/\s?#@]+(?:\/[^\s?#@]*)?$/i.test(value)) return '';
+    direct.href = value + '/web/';
+    direct.removeAttribute('hidden');
+    return value;
+  }
+  address.onchange = function () {
+    if (!updateAddress()) direct.setAttribute('hidden','');
+  };
+  updateAddress();
+  var session = null;
+  var device = 'home-theater-' + Math.random().toString(36).slice(2);
+  var items = [];
+  var selected = null;
+  var previousPage = '#home';
+  function byId(id) { return document.getElementById(id); }
+  function api(path, method, body, account, done) {
+    var xhr = new XMLHttpRequest();
+    xhr.open(method, server + path, true);
+    xhr.timeout = 12000;
+    xhr.setRequestHeader('Authorization', 'MediaBrowser Client="Home Theater", Device="LG webOS", DeviceId="' + device + '", Version="0.3.2"' + (account ? ', Token="' + account.AccessToken + '"' : ''));
+    if (body) xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onload = function () {
+      if (xhr.status < 200 || xhr.status >= 300) {
+        done(xhr.status === 401 ? 'Jellyfin rejected the sign-in.' : 'Jellyfin returned HTTP ' + xhr.status + '.'); return;
+      }
+      var value;
+      try { value = xhr.responseText ? JSON.parse(xhr.responseText) : null; }
+      catch (error) { done('Jellyfin returned an unreadable response.'); return; }
+      done(null, value);
+    };
+    xhr.onerror = xhr.ontimeout = function () { done('Cannot reach Jellyfin from this app. Try Open Jellyfin directly below.'); };
+    try { xhr.send(body ? JSON.stringify(body) : null); }
+    catch (error) { xhr.onerror(); }
+  }
+  function artwork(item) {
+    return item.BackdropImageTags && item.BackdropImageTags.length
+      ? server + '/Items/' + encodeURIComponent(item.Id) + '/Images/Backdrop/0?maxWidth=1440&quality=80' : '';
+  }
+  function showArt(item) {
+    var url = artwork(item);
+    if (url) byId('art').style.backgroundImage = 'url(' + url + ')';
+  }
+  function openItem(item) {
+    selected = item;
+    previousPage = location.hash || '#home';
+    byId('back').href = previousPage;
+    byId('detail-title').textContent = item.Name;
+    byId('detail-note').textContent = '';
+    byId('watch').href = server + '/web/#/details?id=' + encodeURIComponent(item.Id) +
+      (session.ServerId ? '&serverId=' + encodeURIComponent(session.ServerId) : '');
+    updateFavorite();
+    showEpisodes(item);
+    showArt(item);
+    location.hash = 'detail';
+    byId('watch').focus();
+  }
+  var video = byId('video');
+  var captionMenu = byId('captions');
+  var activeEpisode = null;
+  var playRequest = 0;
+  function showEpisodes(item) {
+    var list = byId('episodes');
+    list.textContent = '';
+    byId('play').hidden = item.Type === 'Series';
+    if (item.Type !== 'Series') return;
+    api('/Shows/' + encodeURIComponent(item.Id) + '/Episodes?UserId=' + encodeURIComponent(session.User.Id), 'GET', null, session, function (error, data) {
+      if (selected !== item) return;
+      if (error) { list.textContent = error; return; }
+      (data.Items || []).forEach(function (episode) {
+        var control = document.createElement('button');
+        control.type = 'button';
+        control.textContent = episodeLabel(episode);
+        control.onclick = function () { play(episode); };
+        list.appendChild(control);
+      });
+    });
+  }
+  function episodeLabel(episode) {
+    return 'S' + (episode.ParentIndexNumber || 0) + ' E' + (episode.IndexNumber || 0) + ' · ' + episode.Name;
+  }
+  function streamQuery(params) {
+    return Object.keys(params).map(function (key) { return encodeURIComponent(key) + '=' + encodeURIComponent(params[key]); }).join('&');
+  }
+  function resetPlayer() {
+    activeEpisode = null;
+    video.pause();
+    video.removeAttribute('src');
+    while (video.firstChild) video.removeChild(video.firstChild);
+    video.load();
+    captionMenu.options.length = 1;
+    captionMenu.value = '-1';
+  }
+  function play(item) {
+    var request = ++playRequest;
+    resetPlayer();
+    location.hash = 'player';
+    byId('playing-title').textContent = item.Name;
+    byId('play-status').textContent = 'Loading playback...';
+    var itemId = encodeURIComponent(item.Id);
+    api('/Items/' + itemId + '/PlaybackInfo?UserId=' + encodeURIComponent(session.User.Id), 'GET', null, session, function (error, data) {
+      if (request !== playRequest || location.hash !== '#player') return;
+      var media = data && data.MediaSources && data.MediaSources[0];
+      if (error || !media) { byId('play-status').textContent = error || 'No playable media source.'; return; }
+      var query = {MediaSourceId:media.Id, DeviceId:device, api_key:session.AccessToken,
+        VideoCodec:'h264', AudioCodec:'aac', VideoBitrate:8000000, AudioBitrate:192000,
+        MaxWidth:1920, MaxHeight:1080, SegmentContainer:'ts', SubtitleStreamIndex:-1};
+      if (data.PlaySessionId) query.PlaySessionId = data.PlaySessionId;
+      var base = '/Videos/' + itemId;
+      (media.MediaStreams || []).filter(function (track) {
+        return track.Type === 'Subtitle' && /^(srt|subrip|webvtt|vtt|ass|ssa|mov_text|text)$/i.test(track.Codec || '');
+      }).forEach(function (track) {
+        var element = document.createElement('track');
+        element.kind = 'subtitles';
+        element.label = track.DisplayTitle || track.Language || 'Track ' + track.Index;
+        element.srclang = track.Language || 'und';
+        element.src = server + base + '/' + encodeURIComponent(media.Id) + '/Subtitles/' + track.Index + '/0/Stream.vtt?' + streamQuery({api_key:session.AccessToken});
+        element.onerror = function () { byId('play-status').textContent = 'That caption track could not be loaded.'; };
+        var option = document.createElement('option');
+        option.value = String(captionMenu.options.length - 1);
+        option.textContent = element.label;
+        captionMenu.appendChild(option);
+        video.appendChild(element);
+      });
+      activeEpisode = item.Type === 'Episode' ? item : null;
+      video.src = server + base + '/master.m3u8?' + streamQuery(query);
+      byId('play-status').textContent = '';
+      var started = video.play();
+      if (started && started.catch) started.catch(function () { if (request === playRequest && location.hash === '#player' && !video.error) byId('play-status').textContent = 'Press Play on the video to start.'; });
+    });
+  }
+  captionMenu.onchange = function () {
+    for (var i = 0; i < video.textTracks.length; i++) video.textTracks[i].mode = Number(this.value) === i ? 'showing' : 'disabled';
+  };
+  video.onerror = function () { if (location.hash === '#player') byId('play-status').textContent = 'This TV could not play the stream. Go back and choose Open in Jellyfin.'; };
+  byId('play').onclick = function () { play(selected); };
+  window.addEventListener('hashchange', function () {
+    if (location.hash !== '#player' && video.getAttribute('src')) { playRequest++; resetPlayer(); }
+  });
+  function shelf(id, list) {
+    var target = byId(id + '-items');
+    while (target.firstChild) target.removeChild(target.firstChild);
+    if (!list.length) target.textContent = 'No titles to show yet.';
+    var fragment = document.createDocumentFragment();
+    list.forEach(function (item) {
+      var card = document.createElement('button');
+      card.className = 'card';
+      card.type = 'button';
+      card.textContent = item.Name;
+      var url = artwork(item);
+      if (url) card.style.backgroundImage = 'linear-gradient(transparent,#080e19),url(' + url + ')';
+      card.onfocus = function () { showArt(item); };
+      card.onmouseenter = card.onfocus;
+      card.onclick = function () { openItem(item); };
+      fragment.appendChild(card);
+    });
+    target.appendChild(fragment);
+  }
+  function render() {
+    shelf('library', items);
+    shelf('movies', items.filter(function (item) { return item.Type === 'Movie'; }));
+    shelf('shows', items.filter(function (item) { return item.Type === 'Series'; }));
+    shelf('favorites', items.filter(function (item) { return item.UserData && item.UserData.IsFavorite; }));
+    shelf('recent', items.slice().sort(function (a,b) { return (b.DateCreated || '').localeCompare(a.DateCreated || ''); }).slice(0,8));
+  }
+  function loadPage(account, results, offset, done) {
+    api('/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=DateCreated&SortBy=SortName&EnableUserData=true&Limit=100&StartIndex=' +
+      offset + '&UserId=' + encodeURIComponent(account.User.Id), 'GET', null, account, function (error, response) {
+      if (error || !response || !response.Items) { done(error || 'Jellyfin did not return a library.'); return; }
+      Array.prototype.push.apply(results, response.Items);
+      if (response.Items.length < 100 || results.length >= response.TotalRecordCount) done(null, results);
+      else loadPage(account, results, offset + response.Items.length, done);
+    });
+  }
+  function updateFavorite() {
+    byId('favorite').textContent = selected.UserData && selected.UserData.IsFavorite ? 'Remove favorite' : 'Add to Favorites';
+  }
+  byId('favorite').onclick = function () {
+    var item = selected;
+    var button = this;
+    var wasFavorite = item.UserData && item.UserData.IsFavorite;
+    button.disabled = true;
+    api('/Users/' + encodeURIComponent(session.User.Id) + '/FavoriteItems/' + encodeURIComponent(item.Id),
+      wasFavorite ? 'DELETE' : 'POST', null, session, function (error) {
+        button.disabled = false;
+        byId('detail-note').textContent = error || '';
+        if (error) return;
+        item.UserData = item.UserData || {};
+        item.UserData.IsFavorite = !wasFavorite;
+        if (selected === item) updateFavorite();
+        render();
+      });
+  };
+  byId('signin').onsubmit = function (event) {
+    event.preventDefault();
+    var nextServer = updateAddress();
+    if (!nextServer) { byId('status').textContent = 'Enter an HTTP or HTTPS server address.'; return; }
+    if (session && nextServer !== server) {
+      session = null;
+      items = [];
+      render();
+    }
+    server = nextServer;
+    var password = byId('password');
+    var credentials = { Username: byId('username').value, Pw: password.value };
+    password.value = '';
+    byId('submit').disabled = true;
+    byId('status').textContent = 'Connecting...';
+    function fail(error) { byId('submit').disabled = false; byId('status').textContent = error; }
+    api('/Users/AuthenticateByName', 'POST', credentials, null, function (error, account) {
+      if (error || !account || !account.User || !account.AccessToken) { fail(error || 'Jellyfin did not return an account.'); return; }
+      loadPage(account, [], 0, function (loadError, data) {
+        if (loadError) { fail(loadError); return; }
+        items = data;
+        session = account;
+        try { localStorage.setItem('chambers-cinema-server', server); } catch (error) {}
+        render();
+        fail('');
+        document.querySelector('.connect').textContent = 'Switch Jellyfin account';
+        location.hash = 'home';
+        document.querySelector('#home a').focus();
+      });
+    });
+  };
+  document.addEventListener('keydown',function (event) {
+    var code = event.keyCode;
+    if (code === 461 && location.hash === '#player') { event.preventDefault(); location.hash = 'detail'; return; }
+    if (code === 461 && location.hash === '#detail') { event.preventDefault(); location.hash = previousPage; return; }
+    if (code < 37 || code > 40 || /^(INPUT|SELECT|VIDEO)$/.test(event.target.tagName)) return;
+    var nodes = document.querySelectorAll('a[href],button,input,select,video');
+    var current = document.activeElement;
+    var from = current.getBoundingClientRect();
+    var best, bestScore = Infinity;
+    var x = code === 37 ? -1 : code === 39 ? 1 : 0;
+    var y = code === 38 ? -1 : code === 40 ? 1 : 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (node === current || node.disabled || !node.offsetWidth) continue;
+      if (current === document.body) { best = node; break; }
+      var box = node.getBoundingClientRect();
+      var dx = box.left + box.width / 2 - from.left - from.width / 2;
+      var dy = box.top + box.height / 2 - from.top - from.height / 2;
+      var forward = dx*x + dy*y;
+      var score = forward + 3*Math.abs(dx*y+dy*x);
+      if (forward > 5 && score < bestScore) { best = node; bestScore = score; }
+    }
+    if (best) { event.preventDefault(); best.focus(); }
+  });
+  byId('signin').removeAttribute('hidden');
+}());
+</script></body></html>
